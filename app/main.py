@@ -235,6 +235,68 @@ def map_data():
  
 
 
+
+@app.route('/api/correlation')
+def correlation_data():
+    health_var  = request.args.get('health', 'SLEEP')
+    weather_var = request.args.get('weather', 'TAVG')
+    state       = request.args.get('state', 'all')
+    year_start  = int(request.args.get('year_start', 2013))
+    year_end    = int(request.args.get('year_end', 2023))
+
+    if health_var not in df.columns or weather_var not in df.columns:
+        return jsonify({"error": "Invalid variable"}), 400
+
+    filtered = df[(df['year'] >= year_start) & (df['year'] <= year_end)]
+    if state != 'all':
+        filtered = filtered[filtered['StateAbbr'] == state]
+
+    grouped = (
+        filtered
+        .groupby(['CountyFIPS', 'County name', 'StateAbbr', 'climate_type_short'])
+        .agg(
+            health_val=(health_var, 'mean'),
+            weather_val=(weather_var, 'mean'),
+            population=('total_population', 'mean')
+        )
+        .dropna(subset=['health_val', 'weather_val'])
+        .reset_index()
+    )
+
+    if len(grouped) >= 2:
+        corr = float(grouped['weather_val'].corr(grouped['health_val']))
+        slope, intercept = np.polyfit(grouped['weather_val'], grouped['health_val'], 1)
+    else:
+        corr = None
+        slope, intercept = None, None
+
+    points = []
+    for _, row in grouped.iterrows():
+        points.append({
+            'fips': str(int(row['CountyFIPS'])).zfill(5),
+            'county': row['County name'].title(),
+            'state': row['StateAbbr'],
+            'climate': row['climate_type_short'],
+            'health_val': round(float(row['health_val']), 2),
+            'weather_val': round(float(row['weather_val']), 2),
+            'population': int(row['population']) if not pd.isna(row['population']) else 0,
+        })
+
+    return jsonify({
+        'data': points,
+        'health_var': health_var,
+        'weather_var': weather_var,
+        'state': state,
+        'year_start': year_start,
+        'year_end': year_end,
+        'correlation': round(corr, 3) if corr is not None and not pd.isna(corr) else None,
+        'regression': {
+            'slope': float(slope) if slope is not None else None,
+            'intercept': float(intercept) if intercept is not None else None,
+        },
+        'n': len(points)
+    })
+
 @app.route('/api/timeseries')
 def timeseries():
     health_var  = request.args.get('health', 'MHLTH')
