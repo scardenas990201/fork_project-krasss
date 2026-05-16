@@ -79,6 +79,16 @@
   .insight-title { font-size: 13px; font-weight: 700; color: #1e3a8a; margin-bottom: 5px; }
   .insight-body { font-size: 12px; color: #666; line-height: 1.6; }
   .insight-stat { font-size: 13px; font-weight: 700; margin-top: 8px; }
+
+
+  /* RELATIONSHIP CHARTS */
+  .chart-note { font-size: 11px; color: #999; margin-bottom: 8px; }
+  .chart-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: #555; }
+  .chart-pill { background: #f0f4ff; border: 1px solid #dbeafe; border-radius: 999px; padding: 4px 9px; }
+  .viz-tooltip { position: fixed; background: #fff; border: 1px solid #e0e0e0; border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; min-width: 190px; pointer-events: none; display: none;
+    z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,0.12); color: #555; }
+  .viz-tooltip strong { color: #1e3a8a; }
 </style>
 
 <div class="eda-wrap">
@@ -183,7 +193,7 @@
       </div>
       <!-- Action buttons -->
       <div style="display:flex;gap:8px;margin-top:14px;">
-        <button class="apply-btn" onclick="loadMap()">Apply filters</button>
+        <button class="apply-btn" onclick="loadMap();loadCorrelation()">Apply filters</button>
         <button onclick="resetFilters()" style="padding:8px 20px;background:#fff;color:#555;border:1px solid #ccc;border-radius:7px;cursor:pointer;font-size:13px;font-weight:600;height:36px;">Reset filters</button>
       </div>
     </div>
@@ -294,6 +304,14 @@
  
     </div>
 
+    <!-- Combined dual-axis trend chart -->
+    <div style="border-top:1px solid #eee;padding-top:1rem;margin-bottom:1rem;">
+      <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:2px;" id="ts-combined-title">Health and weather trend together</div>
+      <div class="chart-note">Dual-axis annual trend · selected health outcome compared with selected weather exposure</div>
+      <svg id="ts-combined-svg" width="100%" viewBox="0 0 680 240" style="display:block;"></svg>
+      <div id="ts-combined-legend" style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;"></div>
+    </div>
+
     <!-- Heatmap tab row and panel -->
      <div style="display:flex;gap:6px;margin:1rem 0 0.75rem;" id="ts-tab-row">
       <div class="tab active" data-tab="trend" onclick="switchTSTab('trend')">Trend line</div>
@@ -312,7 +330,20 @@
         </div>
       </div>
     </div>
- 
+
+    <!-- Weather × health correlation scatterplot -->
+    <div style="border-top:1px solid #eee;padding-top:1rem;margin-bottom:1rem;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:2px;" id="corr-title">County weather × health relationship</div>
+          <div class="chart-note">Each point is a county average for the selected year range · point size reflects population</div>
+        </div>
+        <button class="apply-btn" onclick="loadCorrelation()">Update relationship</button>
+      </div>
+      <svg id="corr-svg" width="100%" viewBox="0 0 680 300" style="display:block;"></svg>
+      <div id="corr-meta" class="chart-meta"></div>
+    </div>
+
     <!-- Summary stats table -->
     <div style="border-top:1px solid #eee;padding-top:1rem;">
       <div id="stats-heading" style="font-size:12px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;">Summary statistics · full dataset (all years, all counties)</div>
@@ -390,6 +421,7 @@
  
   </div>
 
+<div id="viz-tooltip" class="viz-tooltip"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <script>
@@ -467,7 +499,7 @@ function resetFilters() {
   document.getElementById('yr-start').value = 2013;
   document.getElementById('yr-end').value = 2023;
   updateSlider();
-  document.getElementById('ts-health-var').value = 'MHLTH';
+  document.getElementById('ts-health-var').value = 'SLEEP';
   document.getElementById('ts-weather-var').value = 'TAVG';
   document.getElementById('ts-state').value = 'all';
   document.querySelectorAll('#demo-checkboxes input:checked').forEach(cb => cb.checked = false);
@@ -626,12 +658,12 @@ function drawMap(hv, wv, demoVars, data, healthNat, weatherNat) {
 }
 
 // ── TIME SERIES ──
-document.getElementById('ts-health-var').value = 'MHLTH';
+document.getElementById('ts-health-var').value = 'SLEEP';
 document.getElementById('ts-weather-var').value = 'TAVG';
 loadTimeSeries();
 function loadTimeSeries() {
   const hv    = document.getElementById('ts-health-var').value;
-const wv    = document.getElementById('ts-weather-var').value;
+  const wv    = document.getElementById('ts-weather-var').value;
   const state = document.getElementById('ts-state').value;
  
   fetch(`/api/timeseries?health=${hv}&weather=${wv}&state=${state}`)
@@ -657,7 +689,15 @@ const wv    = document.getElementById('ts-weather-var').value;
         clearChart('ts-weather-svg', 'ts-weather-title', 'No weather variable selected');
       }
  
+      if (data.data.health && data.data.weather) {
+        drawCombinedTrendChart(data.data.health, data.data.weather, stateName, varMeta[hv], varMeta[wv]);
+      } else {
+        clearChart('ts-combined-svg', 'ts-combined-title', 'Select both a health and weather variable');
+        document.getElementById('ts-combined-legend').innerHTML = '';
+      }
+
       updateStatsTable(data.data, hv, wv, state);
+      loadCorrelation();
     });
 }
  
@@ -733,11 +773,165 @@ function drawTrendChart(svgId, titleId, legendId, seriesData, stateName, meta) {
     </div>` : '');
 }
  
+function drawCombinedTrendChart(healthData, weatherData, stateName, hmeta, wmeta) {
+  if (!hmeta || !wmeta) return;
+  document.getElementById('ts-combined-title').textContent = `${hmeta.label} and ${wmeta.label} over time`;
+
+  const svg = d3.select('#ts-combined-svg');
+  svg.selectAll('*').remove();
+
+  const W=680, H=240, pl=56, pr=58, pt=18, pb=34;
+  const isState = stateName !== 'National avg';
+  const hSeries = isState ? healthData.series : healthData.national;
+  const wSeries = isState ? weatherData.series : weatherData.national;
+  const hNat = healthData.national;
+  const wNat = weatherData.national;
+
+  const years = Array.from(new Set([...hSeries.map(d=>d.year), ...wSeries.map(d=>d.year)])).sort((a,b)=>a-b);
+  const xS = d3.scaleLinear().domain(d3.extent(years)).range([pl, W-pr]);
+  const hVals = [...hSeries.map(d=>d.value), ...hNat.map(d=>d.value)].filter(Number.isFinite);
+  const wVals = [...wSeries.map(d=>d.value), ...wNat.map(d=>d.value)].filter(Number.isFinite);
+  const hY = d3.scaleLinear().domain([d3.min(hVals)*0.97, d3.max(hVals)*1.03]).range([H-pb, pt]);
+  const wY = d3.scaleLinear().domain([d3.min(wVals)*0.97, d3.max(wVals)*1.03]).range([H-pb, pt]);
+
+  [0, 0.25, 0.5, 0.75, 1].forEach(t => {
+    const y = pt + (H-pb-pt)*t;
+    svg.append('line').attr('x1',pl).attr('x2',W-pr).attr('y1',y).attr('y2',y)
+      .attr('stroke','#f0f0f0').attr('stroke-width',1);
+  });
+
+  years.forEach((yr, i) => {
+    if (i % 2 === 0 || i === years.length - 1) {
+      svg.append('text').attr('x',xS(yr)).attr('y',H-pb+16).attr('text-anchor','middle')
+        .attr('font-size',9).attr('fill','#999').text(yr);
+    }
+  });
+
+  hY.ticks(4).forEach(v => {
+    svg.append('text').attr('x',pl-6).attr('y',hY(v)+4).attr('text-anchor','end')
+      .attr('font-size',9).attr('fill',hmeta.color[1]).text(v.toFixed(1)+hmeta.unit);
+  });
+  wY.ticks(4).forEach(v => {
+    svg.append('text').attr('x',W-pr+6).attr('y',wY(v)+4).attr('text-anchor','start')
+      .attr('font-size',9).attr('fill',wmeta.color[1]).text(v.toFixed(1)+wmeta.unit);
+  });
+
+  const hLine = d3.line().defined(d=>Number.isFinite(d.value)).x(d=>xS(d.year)).y(d=>hY(d.value)).curve(d3.curveCatmullRom);
+  const wLine = d3.line().defined(d=>Number.isFinite(d.value)).x(d=>xS(d.year)).y(d=>wY(d.value)).curve(d3.curveCatmullRom);
+
+  if (isState) {
+    svg.append('path').datum(hNat).attr('d',hLine).attr('fill','none').attr('stroke',hmeta.color[1]).attr('stroke-width',1.2).attr('stroke-opacity',0.35).attr('stroke-dasharray','4 3');
+    svg.append('path').datum(wNat).attr('d',wLine).attr('fill','none').attr('stroke',wmeta.color[1]).attr('stroke-width',1.2).attr('stroke-opacity',0.35).attr('stroke-dasharray','4 3');
+  }
+
+  svg.append('path').datum(hSeries).attr('d',hLine).attr('fill','none').attr('stroke',hmeta.color[1]).attr('stroke-width',2.5);
+  svg.append('path').datum(wSeries).attr('d',wLine).attr('fill','none').attr('stroke',wmeta.color[1]).attr('stroke-width',2.5);
+
+  hSeries.forEach(d => svg.append('circle').attr('cx',xS(d.year)).attr('cy',hY(d.value)).attr('r',3)
+    .attr('fill','#fff').attr('stroke',hmeta.color[1]).attr('stroke-width',1.4)
+    .append('title').text(`${hmeta.label} ${d.year}: ${d.value.toFixed(2)}${hmeta.unit}`));
+  wSeries.forEach(d => svg.append('circle').attr('cx',xS(d.year)).attr('cy',wY(d.value)).attr('r',3)
+    .attr('fill','#fff').attr('stroke',wmeta.color[1]).attr('stroke-width',1.4)
+    .append('title').text(`${wmeta.label} ${d.year}: ${d.value.toFixed(2)}${wmeta.unit}`));
+
+  document.getElementById('ts-combined-legend').innerHTML = `
+    <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#555;">
+      <div style="width:18px;height:2px;background:${hmeta.color[1]};"></div><span>${hmeta.label} · left axis</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#555;">
+      <div style="width:18px;height:2px;background:${wmeta.color[1]};"></div><span>${wmeta.label} · right axis</span>
+    </div>
+    ${isState ? '<div style="font-size:11px;color:#aaa;">Dashed lines show national averages</div>' : ''}`;
+}
+
+function loadCorrelation() {
+  const hv = document.getElementById('ts-health-var').value;
+  const wv = document.getElementById('ts-weather-var').value;
+  const state = document.getElementById('ts-state').value;
+  const s = parseInt(yrStart.value), e = parseInt(yrEnd.value);
+  const ys = Math.min(s, e), ye = Math.max(s, e);
+
+  if (!hv || !wv) {
+    clearChart('corr-svg', 'corr-title', 'Select both a health and weather variable');
+    document.getElementById('corr-meta').innerHTML = '';
+    return;
+  }
+
+  fetch(`/api/correlation?health=${hv}&weather=${wv}&state=${state}&year_start=${ys}&year_end=${ye}`)
+    .then(r => r.json())
+    .then(result => drawCorrelationChart(result, varMeta[hv], varMeta[wv]));
+}
+
+function drawCorrelationChart(result, hmeta, wmeta) {
+  const svg = d3.select('#corr-svg');
+  svg.selectAll('*').remove();
+  document.getElementById('corr-title').textContent = `${wmeta.label} vs ${hmeta.label} by county`;
+
+  const points = result.data || [];
+  if (points.length < 2) {
+    svg.append('text').attr('x',340).attr('y',150).attr('text-anchor','middle')
+      .attr('font-size',12).attr('fill','#ccc').text('Not enough data for this selection');
+    document.getElementById('corr-meta').innerHTML = '';
+    return;
+  }
+
+  const W=680, H=300, pl=58, pr=24, pt=20, pb=48;
+  const xExtent = d3.extent(points, d=>d.weather_val);
+  const yExtent = d3.extent(points, d=>d.health_val);
+  const xPad = (xExtent[1]-xExtent[0]) * 0.06 || 1;
+  const yPad = (yExtent[1]-yExtent[0]) * 0.06 || 1;
+  const xS = d3.scaleLinear().domain([xExtent[0]-xPad, xExtent[1]+xPad]).range([pl, W-pr]);
+  const yS = d3.scaleLinear().domain([yExtent[0]-yPad, yExtent[1]+yPad]).range([H-pb, pt]);
+  const rS = d3.scaleSqrt().domain(d3.extent(points, d=>d.population || 1)).range([2.2, 9]);
+  const climate = Array.from(new Set(points.map(d=>d.climate).filter(Boolean))).sort();
+  const cS = d3.scaleOrdinal().domain(climate).range(['#1d4ed8','#92400e','#047857','#9d174d','#7c3aed','#0891b2','#ca8a04','#64748b']);
+
+  xS.ticks(6).forEach(v => {
+    svg.append('line').attr('x1',xS(v)).attr('x2',xS(v)).attr('y1',pt).attr('y2',H-pb).attr('stroke','#f5f5f5');
+    svg.append('text').attr('x',xS(v)).attr('y',H-pb+16).attr('text-anchor','middle').attr('font-size',9).attr('fill','#999').text(v.toFixed(1));
+  });
+  yS.ticks(5).forEach(v => {
+    svg.append('line').attr('x1',pl).attr('x2',W-pr).attr('y1',yS(v)).attr('y2',yS(v)).attr('stroke','#f0f0f0');
+    svg.append('text').attr('x',pl-6).attr('y',yS(v)+4).attr('text-anchor','end').attr('font-size',9).attr('fill','#999').text(v.toFixed(1)+hmeta.unit);
+  });
+
+  svg.append('line').attr('x1',pl).attr('x2',W-pr).attr('y1',H-pb).attr('y2',H-pb).attr('stroke','#ddd');
+  svg.append('line').attr('x1',pl).attr('x2',pl).attr('y1',pt).attr('y2',H-pb).attr('stroke','#ddd');
+  svg.append('text').attr('x',(pl+W-pr)/2).attr('y',H-12).attr('text-anchor','middle').attr('font-size',11).attr('fill','#555').text(`${wmeta.label} (${wmeta.unit || 'value'})`);
+  svg.append('text').attr('transform','rotate(-90)').attr('x',-(pt+H-pb)/2).attr('y',16).attr('text-anchor','middle').attr('font-size',11).attr('fill','#555').text(`${hmeta.label} (${hmeta.unit || 'value'})`);
+
+  const tip = d3.select('#viz-tooltip');
+  svg.append('g').selectAll('circle').data(points).enter().append('circle')
+    .attr('cx',d=>xS(d.weather_val)).attr('cy',d=>yS(d.health_val)).attr('r',d=>rS(d.population || 1))
+    .attr('fill',d=>cS(d.climate || 'Other')).attr('fill-opacity',0.58).attr('stroke','#fff').attr('stroke-width',0.7)
+    .on('mousemove', (event, d) => {
+      tip.style('display','block').style('left',(event.clientX+14)+'px').style('top',(event.clientY+14)+'px')
+        .html(`<strong>${d.county}, ${d.state}</strong><br>${wmeta.label}: ${d.weather_val.toFixed(1)}${wmeta.unit}<br>${hmeta.label}: ${d.health_val.toFixed(1)}${hmeta.unit}<br>Population: ${d.population.toLocaleString()}<br>Climate: ${d.climate || 'N/A'}`);
+    })
+    .on('mouseleave', () => tip.style('display','none'));
+
+  if (result.regression && result.regression.slope !== null) {
+    const x1 = xExtent[0], x2 = xExtent[1];
+    const y1 = result.regression.slope * x1 + result.regression.intercept;
+    const y2 = result.regression.slope * x2 + result.regression.intercept;
+    svg.append('line').attr('x1',xS(x1)).attr('x2',xS(x2)).attr('y1',yS(y1)).attr('y2',yS(y2))
+      .attr('stroke','#111827').attr('stroke-width',2).attr('stroke-dasharray','5 4').attr('opacity',0.75);
+  }
+
+  const stateLabel = result.state === 'all' ? 'All states' : result.state;
+  document.getElementById('corr-meta').innerHTML = `
+    <span class="chart-pill">Pearson r: <strong>${result.correlation === null ? 'N/A' : result.correlation.toFixed(3)}</strong></span>
+    <span class="chart-pill">Counties: <strong>${result.n.toLocaleString()}</strong></span>
+    <span class="chart-pill">Scope: <strong>${stateLabel}</strong></span>
+    <span class="chart-pill">Years: <strong>${result.year_start}–${result.year_end}</strong></span>`;
+}
+
 function clearChart(svgId, titleId, message) {
   document.getElementById(titleId).textContent = message;
   const svg = d3.select('#' + svgId);
   svg.selectAll('*').remove();
-  svg.append('text').attr('x',160).attr('y',90).attr('text-anchor','middle')
+  const vb = (svg.attr('viewBox') || '0 0 320 180').split(' ').map(Number);
+  svg.append('text').attr('x',vb[2]/2).attr('y',vb[3]/2).attr('text-anchor','middle')
     .attr('font-size',12).attr('fill','#ccc').text(message);
 }
  
@@ -769,16 +963,6 @@ function updateStatsTable(data, hv, wv, state) {
 
   tbody.innerHTML = rows.length > 0 ? rows.join('') :
     '<tr><td colspan="7" style="padding:12px 10px;color:#bbb;font-size:12px;">No data available</td></tr>';
-}
-
-function switchTSTab(tab) {
-  document.querySelectorAll('#ts-tab-row .tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`#ts-tab-row [data-tab="${tab}"]`).classList.add('active');
-  document.getElementById('panel-heatmap').style.display = tab === 'heatmap' ? 'block' : 'none';
-  if (tab === 'heatmap') {
-    const hv = document.getElementById('ts-health-var').value;
-    drawHeatmap(hv);
-  }
 }
 
 const stateFullNames = {
